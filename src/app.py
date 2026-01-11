@@ -5,11 +5,20 @@ A super simple FastAPI application that allows students to view and sign up
 for extracurricular activities at Mergington High School.
 """
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Depends
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse
 import os
 from pathlib import Path
+
+# Database and models
+from typing import List
+from sqlmodel import select, Session
+from db import init_db, get_session
+from models import User, UserCreate, UserRead
+from passlib.context import CryptContext
+
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 app = FastAPI(title="Mergington High School API",
               description="API for viewing and signing up for extracurricular activities")
@@ -18,6 +27,16 @@ app = FastAPI(title="Mergington High School API",
 current_dir = Path(__file__).parent
 app.mount("/static", StaticFiles(directory=os.path.join(Path(__file__).parent,
           "static")), name="static")
+
+# Initialize database on startup and provide DB session dependency
+@app.on_event("startup")
+def on_startup():
+    init_db()
+
+
+def get_db():
+    with get_session() as session:
+        yield session
 
 # In-memory activity database
 activities = {
@@ -130,3 +149,33 @@ def unregister_from_activity(activity_name: str, email: str):
     # Remove student
     activity["participants"].remove(email)
     return {"message": f"Unregistered {email} from {activity_name}"}
+
+
+# ----------------------
+# User endpoints (persistent)
+# ----------------------
+
+@app.post("/users", response_model=UserRead)
+def create_user(user_create: UserCreate, db: Session = Depends(get_db)):
+    """Create a new user. Password is optional for now."""
+    # Check for existing user
+    existing = db.exec(select(User).where(User.email == user_create.email)).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="User already exists")
+
+    hashed = None
+    if getattr(user_create, "password", None):
+        hashed = pwd_context.hash(user_create.password)
+
+    user = User(email=user_create.email, full_name=user_create.full_name, hashed_password=hashed)
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@app.get("/users", response_model=List[UserRead])
+def list_users(db: Session = Depends(get_db)):
+    """List all users."""
+    users = db.exec(select(User)).all()
+    return users
