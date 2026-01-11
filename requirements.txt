@@ -1,2 +1,8 @@
 fastapi
 uvicorn
+sqlmodel
+alembic
+passlib[bcrypt]
+pytest
+requests
+httpx
